@@ -15,6 +15,8 @@ parser.add_argument("-s", "--speed", type=int, help="Specify elevator speed", de
 parser.add_argument("-a", "--algorithm", type=str, help="Specify elevator algorithm", default="FCFS")
 parser.add_argument("-i", "--idle", type=bool, help="Specify if the elevator go idle or not", default=False)
 parser.add_argument("-l", "--lambd", type=float, help="Specify the lambda value", default=0.5)
+parser.add_argument("-d", "--duration", type=int, help="Specify the duration for the simulation", default=10000)
+
 args = parser.parse_args()
 
 FLOORS = [1,2,3,4,5,6,7]
@@ -22,6 +24,7 @@ SPEED = args.speed
 CAPACITY = args.capacity
 ELEVATORS = args.elevators
 LAMBDA = args.lambd
+SIMU_DURATION = args.duration
 
 WAITING = deque([])
 WORKING = deque([])
@@ -49,19 +52,21 @@ class Building:
     def __init__(self, env):
         self.floors = FLOORS
         self.action = env.process(self.run(env))
-  
     def run(self, env):
+        cpt = 0 #Monitor how many user will be created by the simulation
         print(env.now, " : Le pavillon is open")
         for x in range(ELEVATORS):
             Elevator(env, (x+1))   # Genere X elevator dans le batiment  
         id = 1
         while True:
             yield env.timeout(int(rnd.poisson(lam=60/LAMBDA, size =1)))  # Processus d'arrivée de Poisson       
-            if env._now < 1000 : #Empeche de nouveau individus de monter pour pouvoir fermer le batiment
+            if env.now < int(SIMU_DURATION / (1.05)) : #Empeche de nouveau individus de monter pour pouvoir fermer le batiment
                 new_user = Individual(env, id)
                 WAITING.append(new_user)
                 print(env.now, " : Individual ", new_user.id, " waiting in RDC")
+                cpt += 1
             id += 1
+            print("Users created count is :",cpt)
 
 
 class Individual:
@@ -154,13 +159,14 @@ class Elevator:
             elif selected_user.is_leaving is False:
                 selected_user.waiting_time_up = env.now            
             for user in list(WAITING):        
-                if user.current == selected_user.current:  
-                    if user.is_leaving is True:
-                        user.waiting_time_down = env.now
-                    elif user.is_leaving is False:
-                        user.waiting_time_up = env.now
-                    self.shaft.append(user)
-                    WAITING.remove(user)
+                if len(list(self.shaft)) < CAPACITY:
+                    if user.current == selected_user.current:  
+                        if user.is_leaving is True:
+                            user.waiting_time_down = env.now
+                        elif user.is_leaving is False:
+                            user.waiting_time_up = env.now
+                        self.shaft.append(user)
+                        WAITING.remove(user)
             cage = print_by_id(self.shaft)
             print(env.now, " : Elevator ", self.id, " CARRY ", cage)
             yield env.process(self.FCFS_handle_users(env))  
@@ -196,11 +202,6 @@ class Elevator:
             yield env.process(self.idle(env))
 
     def SSTF_handle_users(self, env):
-        #print(print_by_expected(self.shaft))
-        #self.shaft = sorted(self.shaft, key=operator.attrgetter("expected"))
-        print(print_by_id(self.shaft))
-        print(print_by_expected(self.shaft))
-
         for _ in range(len(self.shaft)) :      
             tmp = 100              
             for user in list(self.shaft): 
@@ -228,7 +229,7 @@ class Elevator:
               
 env = simpy.Environment()
 pavillon = Building(env)
-env.run(until=2000)
+env.run(until=SIMU_DURATION)
 
 getAllResult() # To Remove
 
