@@ -1,32 +1,42 @@
 import argparse
 import csv
+import operator
 import time
 import random
 import simpy
 from simpy.util import start_delayed
 from collections import deque
-
+import numpy.random as rnd
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-e", "--elevators", type=int, help="Specify elevators number", default=1)
 parser.add_argument("-c", "--capacity", type=int, help="Specify elevator capacity", default=1)
+parser.add_argument("-s", "--speed", type=int, help="Specify elevator speed", default=10)
 parser.add_argument("-a", "--algorithm", type=str, help="Specify elevator algorithm", default="FCFS")
 parser.add_argument("-i", "--idle", type=bool, help="Specify if the elevator go idle or not", default=False)
+parser.add_argument("-l", "--lambd", type=float, help="Specify the lambda value", default=0.5)
 args = parser.parse_args()
 
 FLOORS = [1,2,3,4,5,6,7]
-SPEED = 10
+SPEED = args.speed
 CAPACITY = args.capacity
 ELEVATORS = args.elevators
+LAMBDA = args.lambd
 
 WAITING = deque([])
 WORKING = deque([])
 LEFT = []
 
-def getListAttr(list):
+def print_by_id(list):
     result = []
     for item in list:
         result.append(item.id)
+    return result
+
+def print_by_expected(list):
+    result = []
+    for item in list:
+        result.append(item.expected)
     return result
 
 def getAllResult():
@@ -46,7 +56,7 @@ class Building:
             Elevator(env, (x+1))   # Genere X elevator dans le batiment  
         id = 1
         while True:
-            yield env.timeout(10) #Attend 120 sec pour generer un nouvel Individual
+            yield env.timeout(int(rnd.poisson(lam=60/LAMBDA, size =1)))  # Processus d'arrivée de Poisson       
             if env._now < 1000 : #Empeche de nouveau individus de monter pour pouvoir fermer le batiment
                 new_user = Individual(env, id)
                 WAITING.append(new_user)
@@ -98,10 +108,11 @@ class Elevator:
         self.shaft = deque([])
         
     def move(self, env, user):
+ 
         eta_out = abs((user.expected - self.e_current)*self.speed) #Temps pour que l'ascenceur depose l'individu au bon etage
         yield env.timeout(eta_out) #On bloque l'ascenceur tant qu'il n'a pas deposé l'individu   
         self.e_current = user.expected #definir le nouvel etage ou se trouve l'ascenceur       
-        print(env.now, " : Elevator ", self.id, " drops Individual ", user.id, " at floor |", self.e_current, "| it takes ", eta_out)
+        print(env.now, " : Elevator ", self.id, " DROPS Individual ", user.id, " at floor |", self.e_current, "| it takes ", eta_out)
         self.shaft.remove(user) # Le user arrive a son etage on le retire de la liste          
         if user.is_leaving is True :
             user.leaving_time = env.now
@@ -111,12 +122,21 @@ class Elevator:
             user.current = self.e_current
             user.expected = 1
             WORKING.append(user) # On rajoute le user a la liste working
+        
+
+    def idle(self, env):
+        eta_out = abs((3 - self.e_current)*self.speed)
+        print(env.now, " : Elevator ",self.id, " IDLE to floor 3, it takes :", eta_out)
+        
+        yield env.timeout(eta_out)
+        self.e_current = 3
     
-    def fcfs_handle_users(self, env):   
+    def FCFS_handle_users(self, env):   
         while len(self.shaft) != 0 : 
             for user in list(self.shaft) :
                 if user.is_leaving is False: #Si individu monte travailler on enregistre le temps d'attente pour pouvoir monter
-                    user.waiting_time_up = env.now              
+                    user.waiting_time_up = env.now   
+                               
                 yield env.process(self.move(env, user))
         
     def FCFS(self, env):
@@ -125,10 +145,10 @@ class Elevator:
             selected_user = WAITING.popleft() #On defile le premier individu en attente
             self.shaft.append(selected_user) #On enfile le premier individu dans notre cage d'ascenceur
             eta_in = abs((self.e_current - selected_user.current)*self.speed) #Temps pour que l'ascenceur rejoigne l'individu au bon etage
-            print(env.now, " : Indiviual ", selected_user.id, " call Elevator ", self.id, " from |", selected_user.current, "| to reach |", selected_user.expected, "|")
+            print(env.now, " : Indiviual ", selected_user.id, " CALL Elevator ", self.id, " from |", selected_user.current, "| to reach |", selected_user.expected, "|")
             yield env.timeout(eta_in) #On bloque l'ascenceur tant qu'il n'a pas atteint l'individu
             self.e_current = selected_user.current            
-            print(env.now, " : Elevator ", self.id, " picks Individual ", selected_user.id, "at |",self.e_current,"| it takes ", eta_in)
+            print(env.now, " : Elevator ", self.id, " PICKS Individual ", selected_user.id, "at |",self.e_current,"| it takes ", eta_in)
             if selected_user.is_leaving is True:
                 selected_user.waiting_time_down = env.now
             elif selected_user.is_leaving is False:
@@ -141,22 +161,60 @@ class Elevator:
                         user.waiting_time_up = env.now
                     self.shaft.append(user)
                     WAITING.remove(user)
-            cage = getListAttr(self.shaft)
-            print(env.now, " : Elevator ", self.id, " carrying ", cage)
-            yield env.process(self.fcfs_handle_users(env))  
+            cage = print_by_id(self.shaft)
+            print(env.now, " : Elevator ", self.id, " CARRY ", cage)
+            yield env.process(self.FCFS_handle_users(env))  
+        elif (len(WAITING) == 0 and args.idle is True and self.e_current != 3):
+            yield env.process(self.idle(env))
         
             
-# A revoir suite a quelques changements inopinés
-    # def SSTF(self, env):
-    #     """Shortest Seek Time First"""
-    #     tmp = 100
-    #     if(len(WAITING) != 0):
-    #         for x in WAITING:
-    #             if WAITING[x].is_waiting == True:
-    #                 if(abs(self.e_current - x.expected) < tmp):
-    #                     tmp = abs(self.e_current - x.expected)
-    #                     selected = x
-    #         yield env.process(self.handle_user(env, selected))
+    def SSTF(self, env):
+        """Shortest Seek Time First"""
+        tmp = 100
+        if(len(WAITING) != 0):
+            for user in list(WAITING):
+                if user.is_waiting == True:
+                    if(abs(self.e_current - user.current) < tmp):
+                        tmp = abs(self.e_current - user.current)
+                        selected_user = user
+            
+            WAITING.remove(selected_user) #On defile le premier individu en attente
+            self.shaft.append(selected_user) #On enfile le premier individu dans notre cage d'ascenceur
+            eta_in = abs((self.e_current - selected_user.current)*self.speed) #Temps pour que l'ascenceur rejoigne l'individu au bon etage
+            print(env.now, " : Indiviual ", selected_user.id, " CALL Elevator ", self.id, " from |", selected_user.current, "| to reach |", selected_user.expected, "|")
+            yield env.timeout(eta_in)
+            self.e_current = selected_user.current            
+            print(env.now, " : Elevator ", self.id, " PICKS Individual ", selected_user.id, "at |",self.e_current,"| it takes ", eta_in)
+            for user in list(WAITING):
+                if len(list(self.shaft)) < CAPACITY:
+                    if user.current == selected_user.current:
+                        self.shaft.append(user)
+                        WAITING.remove(user)
+            yield env.process(self.SSTF_handle_users(env))
+        
+        elif (len(WAITING) == 0 and args.idle is True and self.e_current != 3):
+            yield env.process(self.idle(env))
+
+    def SSTF_handle_users(self, env):
+        #print(print_by_expected(self.shaft))
+        #self.shaft = sorted(self.shaft, key=operator.attrgetter("expected"))
+        print(print_by_id(self.shaft))
+        print(print_by_expected(self.shaft))
+
+        for _ in range(len(self.shaft)) :      
+            tmp = 100              
+            for user in list(self.shaft): 
+                if(abs(self.e_current - user.expected) < tmp):
+                    tmp = abs(self.e_current - user.expected)
+                    chosen_user = user
+        
+            if chosen_user.is_leaving is True:
+                chosen_user.waiting_time_down = env.now
+            elif chosen_user.is_leaving is False:
+                chosen_user.waiting_time_up = env.now   
+                
+            print("chosen user is : ", chosen_user.id)
+            yield env.process(self.move(env, chosen_user))
         
     def run(self, env):
         print(env.now ," : Elevator ",self.id," is running")
@@ -165,8 +223,7 @@ class Elevator:
             if(args.algorithm == "FCFS"):  
                 yield env.process(self.FCFS(env))
             elif(args.algorithm == "SSTF"):
-                yield env.timeout(1)
-                # yield env.process(self.SSTF(env))
+                yield env.process(self.SSTF(env))
                 
               
 env = simpy.Environment()
@@ -179,7 +236,7 @@ getAllResult() # To Remove
 def results_to_csv():
     t = time.localtime()
     current_time = time.strftime("%H:%M:%S", t)
-    with open(current_time+"_"+str(args.elevators)+"elevators_"+str(args.capacity)+"capacity_idle="+str(args.idle)+"_"+args.algorithm+".csv", 'w', newline='') as file:
+    with open(current_time+"_elevators="+str(args.elevators)+"_capacity="+str(args.capacity)+"_speed="+str(args.speed)+"_idle="+str(args.idle)+"_algorithm="+args.algorithm+"_lambda="+str(args.lambd)+".csv", 'w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["USER","WAITING_TIME_UP", "WAITING_TIME_DOWN", "LEAVING_TIME_CALL", "LEAVING_TIME"])
         for user in LEFT:
